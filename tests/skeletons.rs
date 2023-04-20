@@ -1076,6 +1076,17 @@ members = ["crates/*"]
 name = "lib_a"
 version = "0.0.1"
 workspace = "../.."
+
+[dependencies]
+lib_b = { path = "../lib_b" }
+    "#,
+        )
+        .lib_package(
+            "crates/lib_b",
+            r#"
+[package]
+name = "lib_b"
+version = "0.0.1"
     "#,
         )
         .build();
@@ -1108,7 +1119,7 @@ lib_a = {{ path = "{}/crates/lib_a" }}
     let skeleton = Skeleton::derive(project.path(), None).unwrap();
 
     // Assert
-    assert_eq!(skeleton.manifests.len(), 4);
+    assert_eq!(skeleton.manifests.len(), 5);
 }
 
 fn check(actual: &str, expect: Expect) {
