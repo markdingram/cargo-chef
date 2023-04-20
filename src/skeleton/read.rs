@@ -1,8 +1,8 @@
 //! Logic to read all the files required to build a caching layer for a project.
 use super::ParsedManifest;
 use cargo_manifest::Manifest;
-use cargo_metadata::{Metadata, Package};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use cargo_metadata::Metadata;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
@@ -36,84 +36,38 @@ pub(super) fn config<P: AsRef<Path>>(base_path: &P) -> Result<Option<String>, an
     }
 }
 
-pub fn collect_local_packages(metadata: &Metadata) -> Vec<&Package> {
-    // walk down from the workspace packages adding *any* local package that is discovered
-
-    let mut packages = metadata.workspace_packages();
-
-    // every local package that could be referenced - note: is not guaranteed all local packages belong to this Workspace
-    let path_packages = metadata
-        .packages
-        .iter()
-        .filter_map(|p| {
-            if p.source.is_none() {
-                Some((p.manifest_path.as_std_path(), p))
-            } else {
-                None
-            }
-        })
-        .collect::<HashMap<_, _>>();
-
-    let mut seen = HashSet::new();
-    let mut queue = metadata
-        .workspace_packages()
-        .into_iter()
-        .collect::<VecDeque<_>>();
-
-    while let Some(next) = queue.pop_front() {
-        seen.insert(&next.id);
-        let path_deps = next
-            .dependencies
-            .iter()
-            .filter_map(|d: &cargo_metadata::Dependency| d.path.clone())
-            .map(|p| p.as_std_path().to_path_buf().join("Cargo.toml"))
-            .collect::<Vec<_>>();
-
-        for path_dep in path_deps {
-            if let Some(package) = path_packages.get(path_dep.as_path()) {
-                if !seen.contains(&package.id) {
-                    packages.push(package);
-                    queue.push_back(package);
-                }
-            }
-        }
-    }
-
-    packages
-}
-
 pub(super) fn manifests<P: AsRef<Path>>(
     base_path: &P,
     metadata: Metadata,
 ) -> Result<Vec<ParsedManifest>, anyhow::Error> {
-    fn try_read_manifest(path: &PathBuf) -> anyhow::Result<Manifest> {
+    fn try_read_manifest(path: &Path) -> anyhow::Result<Manifest> {
         let contents: String = fs::read_to_string(path)?;
 
         Ok(cargo_manifest::Manifest::from_str(&contents)?)
     }
 
-    let manifest_paths: BTreeSet<PathBuf> = collect_local_packages(&metadata)
+    let mut manifest_paths = metadata
+        .packages
         .iter()
-        .map(|package| package.manifest_path.clone().into_std_path_buf())
-        .chain(
-            metadata
-                .root_package()
-                .map(|p| p.clone().manifest_path.into_std_path_buf())
-                .or_else(|| Some(base_path.as_ref().join("Cargo.toml"))),
-        )
+        .filter_map(|p| {
+            if p.source.is_none() {
+                Some(p.manifest_path.to_path_buf())
+            } else {
+                None
+            }
+        })
         .collect::<BTreeSet<_>>();
+    manifest_paths.insert(metadata.workspace_root.join("Cargo.toml"));
 
     let mut manifests = BTreeMap::<PathBuf, Manifest>::new();
     for absolute_path in manifest_paths {
-        let parsed = try_read_manifest(&absolute_path)?;
+        let parsed = try_read_manifest(absolute_path.as_std_path())?;
 
         // it's possible that a path dependency could reference a different Workspace Root
         if let Some(workspace) = parsed.package.as_ref().and_then(|p| p.workspace.as_ref()) {
             let workspace_path = absolute_path
                 .parent()
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Unable to get parent of {}", absolute_path.display())
-                })?
+                .ok_or_else(|| anyhow::anyhow!("Unable to get parent of {}", absolute_path))?
                 .join(workspace)
                 .join("Cargo.toml")
                 .canonicalize()?;
@@ -122,7 +76,7 @@ pub(super) fn manifests<P: AsRef<Path>>(
             }
         }
 
-        manifests.insert(absolute_path, parsed);
+        manifests.insert(absolute_path.into_std_path_buf(), parsed);
     }
 
     manifests
