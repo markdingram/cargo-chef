@@ -11,7 +11,10 @@ use fs_err as fs;
 use globwalk::GlobWalkerBuilder;
 use pathdiff::diff_paths;
 use serde::{Deserialize, Serialize};
+use std::fs::{File, FileTimes};
+use std::io;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct Skeleton {
@@ -145,6 +148,12 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
         };
 
         // Save all manifests to disks
+        fn set_epoch_modified<P: AsRef<Path>>(manifest_path: P) -> io::Result<()> {
+            let dest = File::options().write(true).open(manifest_path)?;
+            dest.set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH))?;
+            Ok(())
+        }
+
         for manifest in &self.manifests {
             // Persist manifest
             let manifest_path = base_path.join(&manifest.relative_path);
@@ -155,6 +164,8 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
                 base_path.to_path_buf()
             };
             fs::write(&manifest_path, &manifest.contents)?;
+            set_epoch_modified(manifest_path)?;
+
             let parsed_manifest =
                 cargo_manifest::Manifest::from_slice(manifest.contents.as_bytes())?;
 
@@ -199,6 +210,7 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
                     fs::create_dir_all(dir)?;
                 }
                 fs::write(&path, content)?;
+                set_epoch_modified(path)?;
             }
         }
         Ok(())
